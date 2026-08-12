@@ -162,28 +162,15 @@ class MercosClient:
     async def list_page(self, resource: str, *, changed_after: str | None = None) -> dict[str, Any]:
         """Fetch a single Mercos page. nextCursor is set only when more pages exist."""
         params = {"alterado_apos": changed_after} if changed_after else {}
-        versions = ("v2", "v1") if resource == "pedidos" else ("v1",)
-        last_error: MercosError | None = None
+        # Pedidos só na API v2 — não tenta v1
+        version = "v2" if resource == "pedidos" else "v1"
         async with httpx.AsyncClient(
             headers=self._headers(),
             timeout=self.settings.mercos_timeout_seconds,
             verify=self.settings.mercos_verify_ssl,
             transport=self._transport,
         ) as client:
-            for version in versions:
-                try:
-                    response = await self._paged_request(client, resource, params, version=version)
-                    break
-                except MercosError as exc:
-                    last_error = exc
-                    if exc.status_code == 403 and version == "v2" and resource == "pedidos":
-                        logger.warning("pedidos v2 sem permissão — tentando api/v1")
-                        continue
-                    if exc.status_code == 403 and version == "v1" and resource == "pedidos":
-                        continue
-                    raise
-            else:
-                raise last_error or MercosError("Falha ao paginar recurso Mercos")
+            response = await self._paged_request(client, resource, params, version=version)
         data = response.json()
         if isinstance(data, dict):
             raise MercosError("Resposta paginada inesperada", details=sanitize(data))
