@@ -162,7 +162,7 @@ class MercosClient:
     async def list_page(self, resource: str, *, changed_after: str | None = None) -> dict[str, Any]:
         """Fetch a single Mercos page. nextCursor is set only when more pages exist."""
         params = {"alterado_apos": changed_after} if changed_after else {}
-        versions = ("v1", "v2") if resource == "pedidos" else ("v1",)
+        versions = ("v2", "v1") if resource == "pedidos" else ("v1",)
         last_error: MercosError | None = None
         async with httpx.AsyncClient(
             headers=self._headers(),
@@ -176,8 +176,10 @@ class MercosClient:
                     break
                 except MercosError as exc:
                     last_error = exc
+                    if exc.status_code == 403 and version == "v2" and resource == "pedidos":
+                        logger.warning("pedidos v2 sem permissão — tentando api/v1")
+                        continue
                     if exc.status_code == 403 and version == "v1" and resource == "pedidos":
-                        logger.warning("pedidos v1 sem permissão — tentando api/v2")
                         continue
                     raise
             else:
