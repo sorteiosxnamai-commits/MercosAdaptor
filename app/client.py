@@ -116,10 +116,12 @@ class MercosClient:
                 await asyncio.sleep(self.settings.mercos_page_pause_seconds)
         raise MercosError("Limite máximo de páginas atingido")
 
-    async def _paged_request(self, client: httpx.AsyncClient, resource: str, params: dict) -> httpx.Response:
+    async def _paged_request(
+        self, client: httpx.AsyncClient, resource: str, params: dict, *, version: str = "v1"
+    ) -> httpx.Response:
         last = None
         for attempt in range(self.settings.mercos_max_retries):
-            last = await client.get(self._url(resource), params=params)
+            last = await client.get(self._url(resource, version=version), params=params)
             if last.status_code != 429:
                 break
             if attempt + 1 < self.settings.mercos_max_retries:
@@ -140,9 +142,17 @@ class MercosClient:
                         details={"hint": "loja_nao_encontrada", "status": last.status_code},
                     )
                 details = text
+            if last.status_code in (401, 403):
+                raise MercosError(
+                    f"Sem permissão Mercos para '{resource}'. "
+                    "No painel Mercos (Integração), libere o recurso para o ApplicationToken "
+                    "ou conclua a homologação de produção.",
+                    status_code=403,
+                    details=details,
+                )
             mapped = (
                 last.status_code
-                if 400 <= last.status_code < 500 and last.status_code not in (401, 403)
+                if 400 <= last.status_code < 500
                 else 502
             )
             logger.warning("Mercos page error %s %s: %s", last.status_code, resource, details)
@@ -152,13 +162,26 @@ class MercosClient:
     async def list_page(self, resource: str, *, changed_after: str | None = None) -> dict[str, Any]:
         """Fetch a single Mercos page. nextCursor is set only when more pages exist."""
         params = {"alterado_apos": changed_after} if changed_after else {}
+        versions = ("v1", "v2") if resource == "pedidos" else ("v1",)
+        last_error: MercosError | None = None
         async with httpx.AsyncClient(
             headers=self._headers(),
             timeout=self.settings.mercos_timeout_seconds,
             verify=self.settings.mercos_verify_ssl,
             transport=self._transport,
         ) as client:
-            response = await self._paged_request(client, resource, params)
+            for version in versions:
+                try:
+                    response = await self._paged_request(client, resource, params, version=version)
+                    break
+                except MercosError as exc:
+                    last_error = exc
+                    if exc.status_code == 403 and version == "v1" and resource == "pedidos":
+                        logger.warning("pedidos v1 sem permissão — tentando api/v2")
+                        continue
+                    raise
+            else:
+                raise last_error or MercosError("Falha ao paginar recurso Mercos")
         data = response.json()
         if isinstance(data, dict):
             raise MercosError("Resposta paginada inesperada", details=sanitize(data))
