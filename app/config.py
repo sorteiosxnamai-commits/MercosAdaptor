@@ -1,5 +1,5 @@
 from functools import lru_cache
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     mercos_page_pause_seconds: float = Field(default=0.25, ge=0)
     mercos_verify_ssl: bool = True
     log_level: str = "INFO"
+
+    @field_validator("log_level")
+    @classmethod
+    def normalize_log_level(cls, value: str) -> str:
+        return value.upper()
 
     @property
     def configured(self) -> bool:

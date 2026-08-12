@@ -127,8 +127,44 @@ class MercosClient:
         if last is None or last.status_code == 429:
             raise MercosRateLimitError()
         if last.is_error:
-            raise MercosError("Falha ao paginar recurso Mercos", details=last.text[:500])
+            try:
+                details = sanitize(last.json())
+            except ValueError:
+                details = last.text[:500]
+            mapped = (
+                last.status_code
+                if 400 <= last.status_code < 500 and last.status_code not in (401, 403)
+                else 502
+            )
+            logger.warning("Mercos page error %s %s: %s", last.status_code, resource, details)
+            raise MercosError("Falha ao paginar recurso Mercos", status_code=mapped, details=details)
         return last
+
+    async def list_page(self, resource: str, *, changed_after: str | None = None) -> dict[str, Any]:
+        """Fetch a single Mercos page. nextCursor is set only when more pages exist."""
+        params = {"alterado_apos": changed_after} if changed_after else {}
+        async with httpx.AsyncClient(
+            headers=self._headers(),
+            timeout=self.settings.mercos_timeout_seconds,
+            verify=self.settings.mercos_verify_ssl,
+            transport=self._transport,
+        ) as client:
+            response = await self._paged_request(client, resource, params)
+        data = response.json()
+        if isinstance(data, dict):
+            raise MercosError("Resposta paginada inesperada", details=sanitize(data))
+        if not isinstance(data, list):
+            raise MercosError("Resposta paginada inesperada", details=type(data).__name__)
+        limited = response.headers.get("MEUSPEDIDOS_LIMITOU_REGISTROS") == "1"
+        next_cursor = None
+        if limited and data:
+            next_cursor = next(
+                (str(x.get("ultima_alteracao")) for x in reversed(data) if x.get("ultima_alteracao")),
+                None,
+            )
+            if not next_cursor or next_cursor == changed_after:
+                raise MercosError("Paginação interrompida: cursor não avançou")
+        return {"data": data, "nextCursor": next_cursor, "count": len(data)}
 
     async def list_all(self, resource: str, *, changed_after: str | None = None) -> list[dict]:
         return [row async for row in self.iter_changed(resource, changed_after=changed_after)]

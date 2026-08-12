@@ -34,9 +34,13 @@ async def resources():
 async def list_resource(resource: str, changed_after: str | None = Query(default=None, alias="alterado_apos")):
     if resource not in READ_RESOURCES:
         return JSONResponse(status_code=404, content={"error": "Recurso não suportado"})
-    rows = await MercosClient().list_all(READ_RESOURCES[resource], changed_after=changed_after)
-    cursor = max((str(r.get("ultima_alteracao")) for r in rows if r.get("ultima_alteracao")), default=changed_after)
-    return {"resource": resource, "count": len(rows), "nextCursor": cursor, "data": rows}
+    page = await MercosClient().list_page(READ_RESOURCES[resource], changed_after=changed_after)
+    return {
+        "resource": resource,
+        "count": page["count"],
+        "nextCursor": page["nextCursor"],
+        "data": page["data"],
+    }
 
 
 @app.get("/v1/{resource}/{mercos_id}", dependencies=[Depends(require_api_key)])
