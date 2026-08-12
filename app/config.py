@@ -1,6 +1,35 @@
 from functools import lru_cache
+from urllib.parse import urlparse
+
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def normalize_mercos_base_url(value: str) -> str:
+    url = (value or "").strip().strip('"').strip("'").rstrip("/")
+    if not url:
+        return "https://sandbox.mercos.com/api/v1"
+
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+    path = (parsed.path or "").rstrip("/")
+
+    # Common mistake: storefront subdomain (loja.mercos.com) instead of API host
+    if host.endswith(".mercos.com") and host not in {"sandbox.mercos.com", "app.mercos.com", "api.mercos.com"}:
+        raise ValueError(
+            "MERCOS_BASE_URL parece URL de loja (vitrine). Use "
+            "https://sandbox.mercos.com/api/v1 ou https://app.mercos.com/api/v1"
+        )
+
+    if host in {"sandbox.mercos.com", "app.mercos.com"} and not path:
+        return f"{parsed.scheme}://{host}/api/v1"
+    if host in {"sandbox.mercos.com", "app.mercos.com"} and path == "/api":
+        return f"{parsed.scheme}://{host}/api/v1"
+    if "/api/v" not in path:
+        raise ValueError(
+            "MERCOS_BASE_URL deve incluir /api/v1 (ex.: https://app.mercos.com/api/v1)"
+        )
+    return f"{parsed.scheme}://{host}{path}"
 
 
 class Settings(BaseSettings):
@@ -17,6 +46,11 @@ class Settings(BaseSettings):
     mercos_page_pause_seconds: float = Field(default=0.25, ge=0)
     mercos_verify_ssl: bool = True
     log_level: str = "INFO"
+
+    @field_validator("mercos_base_url", mode="before")
+    @classmethod
+    def normalize_base_url(cls, value: str) -> str:
+        return normalize_mercos_base_url(value)
 
     @field_validator("log_level")
     @classmethod
@@ -35,4 +69,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

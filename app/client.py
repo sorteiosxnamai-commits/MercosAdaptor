@@ -130,7 +130,16 @@ class MercosClient:
             try:
                 details = sanitize(last.json())
             except ValueError:
-                details = last.text[:500]
+                text = last.text[:500]
+                if "Loja não encontrada" in text or "loja publicada" in text.lower():
+                    raise MercosError(
+                        "URL Mercos inválida (resposta de vitrine). "
+                        "Confira MERCOS_BASE_URL: use https://app.mercos.com/api/v1 "
+                        "(produção) ou https://sandbox.mercos.com/api/v1 (sandbox).",
+                        status_code=502,
+                        details={"hint": "loja_nao_encontrada", "status": last.status_code},
+                    )
+                details = text
             mapped = (
                 last.status_code
                 if 400 <= last.status_code < 500 and last.status_code not in (401, 403)

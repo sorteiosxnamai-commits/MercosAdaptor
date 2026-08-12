@@ -1,5 +1,7 @@
 import logging
 from typing import Any
+from urllib.parse import urlparse
+
 from fastapi import Depends, FastAPI, Query
 from fastapi.responses import JSONResponse
 
@@ -22,7 +24,16 @@ async def mercos_error_handler(_, exc: MercosError):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "Mercos_Adaptor", "version": __version__, "mercosConfigured": settings.configured, "environment": settings.environment}
+    parsed = urlparse(settings.mercos_base_url)
+    return {
+        "status": "ok",
+        "service": "Mercos_Adaptor",
+        "version": __version__,
+        "mercosConfigured": settings.configured,
+        "environment": settings.environment,
+        "mercosHost": parsed.netloc,
+        "mercosPath": parsed.path,
+    }
 
 
 @app.get("/v1/resources", dependencies=[Depends(require_api_key)])
