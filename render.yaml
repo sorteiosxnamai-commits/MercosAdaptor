@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: mercos-adaptor
+    runtime: docker
+    healthCheckPath: /health
+    envVars:
+      - key: MERCOS_BASE_URL
+        sync: false
+      - key: MERCOS_APPLICATION_TOKEN
+        sync: false
+      - key: MERCOS_COMPANY_TOKEN
+        sync: false
+      - key: MERCOS_ADAPTOR_API_KEY
+        generateValue: true
+
