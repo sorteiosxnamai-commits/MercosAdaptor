@@ -13,23 +13,26 @@ def normalize_mercos_base_url(value: str) -> str:
     parsed = urlparse(url)
     host = (parsed.netloc or "").lower()
     path = (parsed.path or "").rstrip("/")
+    scheme = parsed.scheme or "https"
+
+    # api.mercos.com is NOT the integration API — it serves storefront HTML 404s
+    if host == "api.mercos.com":
+        host = "app.mercos.com"
 
     # Common mistake: storefront subdomain (loja.mercos.com) instead of API host
-    if host.endswith(".mercos.com") and host not in {"sandbox.mercos.com", "app.mercos.com", "api.mercos.com"}:
+    if host.endswith(".mercos.com") and host not in {"sandbox.mercos.com", "app.mercos.com"}:
         raise ValueError(
             "MERCOS_BASE_URL parece URL de loja (vitrine). Use "
             "https://sandbox.mercos.com/api/v1 ou https://app.mercos.com/api/v1"
         )
 
-    if host in {"sandbox.mercos.com", "app.mercos.com"} and not path:
-        return f"{parsed.scheme}://{host}/api/v1"
-    if host in {"sandbox.mercos.com", "app.mercos.com"} and path == "/api":
-        return f"{parsed.scheme}://{host}/api/v1"
+    if host in {"sandbox.mercos.com", "app.mercos.com"} and path in {"", "/api"}:
+        return f"{scheme}://{host}/api/v1"
     if "/api/v" not in path:
         raise ValueError(
             "MERCOS_BASE_URL deve incluir /api/v1 (ex.: https://app.mercos.com/api/v1)"
         )
-    return f"{parsed.scheme}://{host}{path}"
+    return f"{scheme}://{host}{path}"
 
 
 class Settings(BaseSettings):
