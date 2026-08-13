@@ -42,7 +42,7 @@ class MercosClient:
 
     @staticmethod
     def _version_for_resource(resource: str) -> str:
-        return "v2" if resource.split("/", 1)[0] == "pedidos" else "v1"
+        return "v2" if resource == "pedidos" else "v1"
 
     @staticmethod
     def _retry_after(response: httpx.Response, default: float) -> float:

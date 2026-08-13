@@ -76,3 +76,16 @@ async def test_list_page_returns_last_persistable_cursor():
     assert page["pageCursor"] == "2026-01-02T00:00:00"
     assert page["nextCursor"] is None
 
+
+@pytest.mark.asyncio
+async def test_nested_order_type_resource_remains_on_v1():
+    def handler(request: httpx.Request):
+        assert request.url.path == "/api/v1/pedidos/tipo"
+        return httpx.Response(200, json=[])
+
+    client = MercosClient(settings(), transport=httpx.MockTransport(handler))
+
+    page = await client.list_page("pedidos/tipo")
+
+    assert page["data"] == []
+
