@@ -53,6 +53,7 @@ O consumidor só deve salvar `nextCursor` depois que todos os registros de `data
 | `GET /health` | Saúde e ambiente, sem revelar segredos |
 | `GET /v1/resources` | Recursos suportados |
 | `GET /v1/orders` | Pedidos incrementais |
+| `GET /v1/orders/{mercos_id}` | Detalhe completo do pedido via API Mercos v2 |
 | `GET /v1/products` | Produtos e estoque |
 | `GET /v1/customers` | Clientes |
 | `GET /v1/users` | Vendedores/usuários |

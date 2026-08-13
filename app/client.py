@@ -41,6 +41,10 @@ class MercosClient:
         return f"{base}/{path.lstrip('/')}"
 
     @staticmethod
+    def _version_for_resource(resource: str) -> str:
+        return "v2" if resource.split("/", 1)[0] == "pedidos" else "v1"
+
+    @staticmethod
     def _retry_after(response: httpx.Response, default: float) -> float:
         try:
             payload = response.json()
@@ -91,10 +95,16 @@ class MercosClient:
     async def iter_changed(self, resource: str, *, changed_after: str | None = None) -> AsyncIterator[dict]:
         cursor = changed_after
         seen: set[str] = set()
+        version = self._version_for_resource(resource)
         for page in range(self.settings.mercos_max_pages):
             params = {"alterado_apos": cursor} if cursor else {}
             async with httpx.AsyncClient(headers=self._headers(), timeout=self.settings.mercos_timeout_seconds, verify=self.settings.mercos_verify_ssl, transport=self._transport) as client:
-                response = await self._paged_request(client, resource, params)
+                response = await self._paged_request(
+                    client,
+                    resource,
+                    params,
+                    version=version,
+                )
             data = response.json()
             if isinstance(data, dict):
                 raise MercosError("Resposta paginada inesperada", details=sanitize(data))
@@ -163,7 +173,7 @@ class MercosClient:
         """Fetch a single Mercos page. nextCursor is set only when more pages exist."""
         params = {"alterado_apos": changed_after} if changed_after else {}
         # Pedidos só na API v2 — não tenta v1
-        version = "v2" if resource == "pedidos" else "v1"
+        version = self._version_for_resource(resource)
         async with httpx.AsyncClient(
             headers=self._headers(),
             timeout=self.settings.mercos_timeout_seconds,
@@ -177,15 +187,30 @@ class MercosClient:
         if not isinstance(data, list):
             raise MercosError("Resposta paginada inesperada", details=type(data).__name__)
         limited = response.headers.get("MEUSPEDIDOS_LIMITOU_REGISTROS") == "1"
+        page_cursor = next(
+            (str(x.get("ultima_alteracao")) for x in reversed(data) if x.get("ultima_alteracao")),
+            None,
+        )
         next_cursor = None
         if limited and data:
-            next_cursor = next(
-                (str(x.get("ultima_alteracao")) for x in reversed(data) if x.get("ultima_alteracao")),
-                None,
-            )
+            next_cursor = page_cursor
             if not next_cursor or next_cursor == changed_after:
                 raise MercosError("Paginação interrompida: cursor não avançou")
-        return {"data": data, "nextCursor": next_cursor, "count": len(data)}
+        return {
+            "data": data,
+            "pageCursor": page_cursor,
+            "nextCursor": next_cursor,
+            "count": len(data),
+        }
+
+    async def get_detail(self, resource: str, mercos_id: str) -> Any:
+        """Fetch a resource detail using the same API version as its list endpoint."""
+        version = self._version_for_resource(resource)
+        return await self.request(
+            "GET",
+            f"{resource}/{mercos_id}",
+            version=version,
+        )
 
     async def list_all(self, resource: str, *, changed_after: str | None = None) -> list[dict]:
         return [row async for row in self.iter_changed(resource, changed_after=changed_after)]

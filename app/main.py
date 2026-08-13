@@ -49,6 +49,7 @@ async def list_resource(resource: str, changed_after: str | None = Query(default
     return {
         "resource": resource,
         "count": page["count"],
+        "pageCursor": page["pageCursor"],
         "nextCursor": page["nextCursor"],
         "data": page["data"],
     }
@@ -58,7 +59,7 @@ async def list_resource(resource: str, changed_after: str | None = Query(default
 async def get_resource(resource: str, mercos_id: str):
     if resource not in {"customers", "products", "orders"}:
         return JSONResponse(status_code=404, content={"error": "Consulta individual não suportada"})
-    return await MercosClient().request("GET", f"{READ_RESOURCES[resource]}/{mercos_id}")
+    return await MercosClient().get_detail(READ_RESOURCES[resource], mercos_id)
 
 
 @app.post("/v1/customers", dependencies=[Depends(require_api_key)])
