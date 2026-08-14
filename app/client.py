@@ -9,6 +9,7 @@ from app.errors import MercosConfigurationError, MercosError, MercosRateLimitErr
 
 logger = logging.getLogger(__name__)
 SENSITIVE = {"applicationtoken", "companytoken", "authorization", "token", "password", "secret", "apikey", "api_key"}
+ORDER_PAGE_SIZE = 10
 
 
 def sanitize(value: Any) -> Any:
@@ -43,6 +44,13 @@ class MercosClient:
     @staticmethod
     def _version_for_resource(resource: str) -> str:
         return "v2" if resource == "pedidos" else "v1"
+
+    @staticmethod
+    def _page_params(resource: str, changed_after: str | None) -> dict:
+        params = {"alterado_apos": changed_after} if changed_after else {}
+        if resource == "pedidos":
+            params["registros_por_pagina"] = ORDER_PAGE_SIZE
+        return params
 
     @staticmethod
     def _retry_after(response: httpx.Response, default: float) -> float:
@@ -97,7 +105,7 @@ class MercosClient:
         seen: set[str] = set()
         version = self._version_for_resource(resource)
         for page in range(self.settings.mercos_max_pages):
-            params = {"alterado_apos": cursor} if cursor else {}
+            params = self._page_params(resource, cursor)
             async with httpx.AsyncClient(headers=self._headers(), timeout=self.settings.mercos_timeout_seconds, verify=self.settings.mercos_verify_ssl, transport=self._transport) as client:
                 response = await self._paged_request(
                     client,
@@ -171,7 +179,7 @@ class MercosClient:
 
     async def list_page(self, resource: str, *, changed_after: str | None = None) -> dict[str, Any]:
         """Fetch a single Mercos page. nextCursor is set only when more pages exist."""
-        params = {"alterado_apos": changed_after} if changed_after else {}
+        params = self._page_params(resource, changed_after)
         # Pedidos só na API v2 — não tenta v1
         version = self._version_for_resource(resource)
         async with httpx.AsyncClient(

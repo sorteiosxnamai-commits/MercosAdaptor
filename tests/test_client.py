@@ -21,6 +21,7 @@ async def test_pagination_uses_cursor_and_deduplicates():
         nonlocal calls
         calls += 1
         assert request.url.path == "/api/v2/pedidos"
+        assert request.url.params["registros_por_pagina"] == "10"
         if calls == 1:
             return httpx.Response(200, json=[{"id": 1, "ultima_alteracao": "2026-01-01T00:00:00"}], headers={"MEUSPEDIDOS_LIMITOU_REGISTROS": "1"})
         assert request.url.params["alterado_apos"] == "2026-01-01T00:00:00"
@@ -62,6 +63,7 @@ async def test_order_detail_uses_v2_and_preserves_items():
 async def test_list_page_returns_last_persistable_cursor():
     def handler(request: httpx.Request):
         assert request.url.path == "/api/v2/pedidos"
+        assert request.url.params["registros_por_pagina"] == "10"
         return httpx.Response(
             200,
             json=[
