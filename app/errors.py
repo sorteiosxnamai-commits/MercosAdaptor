@@ -11,6 +11,12 @@ class MercosConfigurationError(MercosError):
 
 
 class MercosRateLimitError(MercosError):
-    def __init__(self):
-        super().__init__("Limite de requisições da Mercos excedido", status_code=503)
+    def __init__(self, retry_after: float = 30):
+        wait = max(float(retry_after), 1.0)
+        super().__init__(
+            "Too Many Requests",
+            status_code=429,
+            details={"tempo_ate_permitir_novamente": wait},
+        )
+        self.retry_after = wait
 

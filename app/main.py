@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from app import __version__
 from app.client import MercosClient
 from app.config import get_settings
-from app.errors import MercosError
+from app.errors import MercosError, MercosRateLimitError
 from app.resources import READ_RESOURCES
 from app.security import require_api_key
 
@@ -19,7 +19,14 @@ app = FastAPI(title="Mercos_Adaptor", version=__version__)
 
 @app.exception_handler(MercosError)
 async def mercos_error_handler(_, exc: MercosError):
-    return JSONResponse(status_code=exc.status_code, content={"error": str(exc), "details": exc.details})
+    headers = {}
+    if isinstance(exc, MercosRateLimitError):
+        headers["Retry-After"] = str(int(exc.retry_after))
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": str(exc), "details": exc.details},
+        headers=headers,
+    )
 
 
 @app.get("/health")

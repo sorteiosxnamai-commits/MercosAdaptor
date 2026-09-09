@@ -2,6 +2,7 @@ import httpx
 import pytest
 from app.client import MercosClient, sanitize
 from app.config import Settings
+from app.errors import MercosRateLimitError
 
 
 def settings(**overrides):
@@ -41,6 +42,22 @@ async def test_retries_429():
     client = MercosClient(settings(), transport=httpx.MockTransport(handler))
     assert await client.request("GET", "clientes") == {"ok": True}
     assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_long_429_returns_retry_after_without_busy_waiting():
+    calls = 0
+    def handler(_):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(429, json={"tempo_ate_permitir_novamente": 45})
+
+    client = MercosClient(settings(), transport=httpx.MockTransport(handler))
+    with pytest.raises(MercosRateLimitError) as exc_info:
+        await client.request("GET", "clientes")
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.retry_after >= 45
+    assert calls == 1
 
 
 @pytest.mark.asyncio

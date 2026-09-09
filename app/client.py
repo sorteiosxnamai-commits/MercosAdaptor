@@ -10,6 +10,8 @@ from app.errors import MercosConfigurationError, MercosError, MercosRateLimitErr
 logger = logging.getLogger(__name__)
 SENSITIVE = {"applicationtoken", "companytoken", "authorization", "token", "password", "secret", "apikey", "api_key"}
 ORDER_PAGE_SIZE = 10
+INTERNAL_MAX_WAIT = 15.0
+_mercos_gate = asyncio.Lock()
 
 
 def sanitize(value: Any) -> Any:
@@ -57,38 +59,47 @@ class MercosClient:
         try:
             payload = response.json()
             if isinstance(payload, dict) and payload.get("tempo_ate_permitir_novamente") is not None:
-                return float(payload["tempo_ate_permitir_novamente"]) + 0.5
+                return max(float(payload["tempo_ate_permitir_novamente"]) + 0.5, 0)
         except (ValueError, TypeError):
             pass
         header = response.headers.get("Retry-After")
         try:
-            return float(header) if header else default
+            return max(float(header) if header else default, 0)
         except ValueError:
-            return default
+            return max(default, 0)
+
+    def _raise_rate_limit(self, response: httpx.Response | None) -> None:
+        wait = self.settings.mercos_default_retry_seconds
+        if response is not None:
+            wait = self._retry_after(response, wait)
+        raise MercosRateLimitError(retry_after=max(wait, 1))
 
     async def request(self, method: str, path: str, *, params: dict | None = None, json: Any = None, version: str = "v1") -> Any:
-        async with httpx.AsyncClient(
-            headers=self._headers(), timeout=self.settings.mercos_timeout_seconds,
-            verify=self.settings.mercos_verify_ssl, transport=self._transport,
-        ) as client:
-            last: httpx.Response | None = None
-            for attempt in range(self.settings.mercos_max_retries):
-                try:
-                    response = await client.request(method, self._url(path, version=version), params=params, json=json)
-                except httpx.RequestError as exc:
-                    if attempt + 1 == self.settings.mercos_max_retries:
-                        raise MercosError("Falha de comunicação com a Mercos", details=type(exc).__name__) from exc
-                    await asyncio.sleep(min(2 ** attempt, 8))
-                    continue
-                last = response
-                if response.status_code != 429:
-                    break
-                if attempt + 1 < self.settings.mercos_max_retries:
-                    await asyncio.sleep(self._retry_after(response, self.settings.mercos_default_retry_seconds))
-            if last is None:
-                raise MercosError("Mercos não respondeu")
-            if last.status_code == 429:
-                raise MercosRateLimitError()
+        async with _mercos_gate:
+            async with httpx.AsyncClient(
+                headers=self._headers(), timeout=self.settings.mercos_timeout_seconds,
+                verify=self.settings.mercos_verify_ssl, transport=self._transport,
+            ) as client:
+                last: httpx.Response | None = None
+                for attempt in range(self.settings.mercos_max_retries):
+                    try:
+                        response = await client.request(method, self._url(path, version=version), params=params, json=json)
+                    except httpx.RequestError as exc:
+                        if attempt + 1 == self.settings.mercos_max_retries:
+                            raise MercosError("Falha de comunicação com a Mercos", details=type(exc).__name__) from exc
+                        await asyncio.sleep(min(2 ** attempt, 8))
+                        continue
+                    last = response
+                    if response.status_code != 429:
+                        break
+                    wait = self._retry_after(response, self.settings.mercos_default_retry_seconds)
+                    if wait > INTERNAL_MAX_WAIT or attempt + 1 >= self.settings.mercos_max_retries:
+                        self._raise_rate_limit(response)
+                    await asyncio.sleep(wait)
+                if last is None:
+                    raise MercosError("Mercos não respondeu")
+                if last.status_code == 429:
+                    self._raise_rate_limit(last)
             if last.is_error:
                 try:
                     details = sanitize(last.json())
@@ -138,14 +149,17 @@ class MercosClient:
         self, client: httpx.AsyncClient, resource: str, params: dict, *, version: str = "v1"
     ) -> httpx.Response:
         last = None
-        for attempt in range(self.settings.mercos_max_retries):
-            last = await client.get(self._url(resource, version=version), params=params)
-            if last.status_code != 429:
-                break
-            if attempt + 1 < self.settings.mercos_max_retries:
-                await asyncio.sleep(self._retry_after(last, self.settings.mercos_default_retry_seconds))
+        async with _mercos_gate:
+            for attempt in range(self.settings.mercos_max_retries):
+                last = await client.get(self._url(resource, version=version), params=params)
+                if last.status_code != 429:
+                    break
+                wait = self._retry_after(last, self.settings.mercos_default_retry_seconds)
+                if wait > INTERNAL_MAX_WAIT or attempt + 1 >= self.settings.mercos_max_retries:
+                    self._raise_rate_limit(last)
+                await asyncio.sleep(wait)
         if last is None or last.status_code == 429:
-            raise MercosRateLimitError()
+            self._raise_rate_limit(last)
         if last.is_error:
             try:
                 details = sanitize(last.json())

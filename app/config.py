@@ -44,9 +44,9 @@ class Settings(BaseSettings):
     mercos_adaptor_api_key: str = ""
     mercos_timeout_seconds: float = Field(default=60, gt=0)
     mercos_max_retries: int = Field(default=4, ge=1, le=10)
-    mercos_default_retry_seconds: float = Field(default=6, ge=0)
+    mercos_default_retry_seconds: float = Field(default=15, ge=0)
     mercos_max_pages: int = Field(default=500, ge=1)
-    mercos_page_pause_seconds: float = Field(default=0.25, ge=0)
+    mercos_page_pause_seconds: float = Field(default=0.5, ge=0)
     mercos_verify_ssl: bool = True
     log_level: str = "INFO"
 

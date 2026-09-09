@@ -44,3 +44,21 @@ def test_unsupported_detail_resource_returns_404():
         app.dependency_overrides.clear()
 
     assert response.status_code == 404
+
+
+def test_rate_limit_error_returns_retry_after(monkeypatch):
+    from app.errors import MercosRateLimitError
+
+    async def boom(self, resource: str, *, changed_after: str | None = None):
+        raise MercosRateLimitError(retry_after=12)
+
+    monkeypatch.setattr(MercosClient, "list_page", boom)
+    app.dependency_overrides[require_api_key] = lambda: None
+    try:
+        response = TestClient(app).get("/v1/customers")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "12"
+    assert response.json()["error"] == "Too Many Requests"
