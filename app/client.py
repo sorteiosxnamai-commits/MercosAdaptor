@@ -110,7 +110,15 @@ class MercosClient:
                     details = sanitize(last.json())
                 except ValueError:
                     details = last.text[:500]
-                mapped = last.status_code if 400 <= last.status_code < 500 and last.status_code not in (401, 403) else 502
+                if last.status_code in (401, 403):
+                    raise MercosError(
+                        f"Sem permissão Mercos para '{path}'. "
+                        "GET por ID só existe no sandbox; em produção use a listagem. "
+                        "Se precisar do detalhe, peça liberação ao suporte Mercos.",
+                        status_code=403,
+                        details=details,
+                    )
+                mapped = last.status_code if 400 <= last.status_code < 500 else 502
                 raise MercosError("A Mercos rejeitou a requisição", status_code=mapped, details=details)
             if last.status_code == 204 or not last.content:
                 await asyncio.sleep(self.settings.mercos_page_pause_seconds)

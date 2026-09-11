@@ -2,7 +2,7 @@ import httpx
 import pytest
 from app.client import MercosClient, sanitize
 from app.config import Settings
-from app.errors import MercosRateLimitError
+from app.errors import MercosError, MercosRateLimitError
 
 
 def settings(**overrides):
@@ -97,6 +97,19 @@ async def test_order_detail_uses_v2_and_preserves_items():
 
     assert detail["id"] == 42
     assert detail["itens"] == [{"id": 7, "produto_id": 3}]
+
+
+@pytest.mark.asyncio
+async def test_order_detail_401_is_permission_error_not_bad_gateway():
+    def handler(request: httpx.Request):
+        assert request.url.path == "/api/v2/pedidos/165803166"
+        return httpx.Response(401, json={"mensagem": "Unauthorized"})
+
+    client = MercosClient(settings(), transport=httpx.MockTransport(handler))
+    with pytest.raises(MercosError) as exc_info:
+        await client.get_detail("pedidos", "165803166")
+    assert exc_info.value.status_code == 403
+    assert "GET por ID" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
