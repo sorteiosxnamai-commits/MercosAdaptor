@@ -22,7 +22,7 @@ async def test_pagination_uses_cursor_and_deduplicates():
         nonlocal calls
         calls += 1
         assert request.url.path == "/api/v2/pedidos"
-        assert request.url.params["registros_por_pagina"] == "10"
+        assert request.url.params["registros_por_pagina"] == "20"
         if calls == 1:
             return httpx.Response(200, json=[{"id": 1, "ultima_alteracao": "2026-01-01T00:00:00"}], headers={"MEUSPEDIDOS_LIMITOU_REGISTROS": "1"})
         assert request.url.params["alterado_apos"] == "2026-01-01T00:00:00"
@@ -50,14 +50,37 @@ async def test_long_429_returns_retry_after_without_busy_waiting():
     def handler(_):
         nonlocal calls
         calls += 1
-        return httpx.Response(429, json={"tempo_ate_permitir_novamente": 45})
+        return httpx.Response(429, json={"tempo_ate_permitir_novamente": 90})
 
     client = MercosClient(settings(), transport=httpx.MockTransport(handler))
     with pytest.raises(MercosRateLimitError) as exc_info:
         await client.request("GET", "clientes")
     assert exc_info.value.status_code == 429
-    assert exc_info.value.retry_after >= 45
+    assert exc_info.value.retry_after >= 90
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_short_429_waits_internally(monkeypatch):
+    calls = 0
+
+    def handler(_):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(429, json={"tempo_ate_permitir_novamente": 20})
+        return httpx.Response(200, json={"ok": True})
+
+    slept = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr("app.client.asyncio.sleep", fake_sleep)
+    client = MercosClient(settings(), transport=httpx.MockTransport(handler))
+    assert await client.request("GET", "clientes") == {"ok": True}
+    assert calls == 2
+    assert slept[0] == pytest.approx(20.5, abs=0.05)
 
 
 @pytest.mark.asyncio
@@ -80,7 +103,7 @@ async def test_order_detail_uses_v2_and_preserves_items():
 async def test_list_page_returns_last_persistable_cursor():
     def handler(request: httpx.Request):
         assert request.url.path == "/api/v2/pedidos"
-        assert request.url.params["registros_por_pagina"] == "10"
+        assert request.url.params["registros_por_pagina"] == "20"
         return httpx.Response(
             200,
             json=[

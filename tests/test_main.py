@@ -62,3 +62,4 @@ def test_rate_limit_error_returns_retry_after(monkeypatch):
     assert response.status_code == 429
     assert response.headers["Retry-After"] == "12"
     assert response.json()["error"] == "Too Many Requests"
+    assert response.json()["details"]["tempo_ate_permitir_novamente"] == 12

@@ -9,8 +9,8 @@ from app.errors import MercosConfigurationError, MercosError, MercosRateLimitErr
 
 logger = logging.getLogger(__name__)
 SENSITIVE = {"applicationtoken", "companytoken", "authorization", "token", "password", "secret", "apikey", "api_key"}
-ORDER_PAGE_SIZE = 10
-INTERNAL_MAX_WAIT = 15.0
+ORDER_PAGE_SIZE = 20
+INTERNAL_MAX_WAIT = 60.0
 _mercos_gate = asyncio.Lock()
 
 
@@ -58,8 +58,13 @@ class MercosClient:
     def _retry_after(response: httpx.Response, default: float) -> float:
         try:
             payload = response.json()
-            if isinstance(payload, dict) and payload.get("tempo_ate_permitir_novamente") is not None:
-                return max(float(payload["tempo_ate_permitir_novamente"]) + 0.5, 0)
+            if isinstance(payload, dict):
+                raw = payload.get("tempo_ate_permitir_novamente")
+                details = payload.get("details")
+                if raw is None and isinstance(details, dict):
+                    raw = details.get("tempo_ate_permitir_novamente")
+                if raw is not None:
+                    return max(float(raw) + 0.5, 0)
         except (ValueError, TypeError):
             pass
         header = response.headers.get("Retry-After")
@@ -108,8 +113,11 @@ class MercosClient:
                 mapped = last.status_code if 400 <= last.status_code < 500 and last.status_code not in (401, 403) else 502
                 raise MercosError("A Mercos rejeitou a requisição", status_code=mapped, details=details)
             if last.status_code == 204 or not last.content:
+                await asyncio.sleep(self.settings.mercos_page_pause_seconds)
                 return None
-            return last.json()
+            payload = last.json()
+            await asyncio.sleep(self.settings.mercos_page_pause_seconds)
+            return payload
 
     async def iter_changed(self, resource: str, *, changed_after: str | None = None) -> AsyncIterator[dict]:
         cursor = changed_after
@@ -141,8 +149,6 @@ class MercosClient:
             if not next_cursor or next_cursor == cursor:
                 raise MercosError("Paginação interrompida: cursor não avançou")
             cursor = next_cursor
-            if page + 1 < self.settings.mercos_max_pages:
-                await asyncio.sleep(self.settings.mercos_page_pause_seconds)
         raise MercosError("Limite máximo de páginas atingido")
 
     async def _paged_request(
@@ -189,6 +195,7 @@ class MercosClient:
             )
             logger.warning("Mercos page error %s %s: %s", last.status_code, resource, details)
             raise MercosError("Falha ao paginar recurso Mercos", status_code=mapped, details=details)
+        await asyncio.sleep(self.settings.mercos_page_pause_seconds)
         return last
 
     async def list_page(self, resource: str, *, changed_after: str | None = None) -> dict[str, Any]:

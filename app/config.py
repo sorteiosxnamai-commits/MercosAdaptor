@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     mercos_max_retries: int = Field(default=4, ge=1, le=10)
     mercos_default_retry_seconds: float = Field(default=15, ge=0)
     mercos_max_pages: int = Field(default=500, ge=1)
-    mercos_page_pause_seconds: float = Field(default=1.0, ge=0)
+    mercos_page_pause_seconds: float = Field(default=2.0, ge=0)
     mercos_verify_ssl: bool = True
     log_level: str = "INFO"
 
