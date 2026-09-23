@@ -63,3 +63,21 @@ def test_rate_limit_error_returns_retry_after(monkeypatch):
     assert response.headers["Retry-After"] == "12"
     assert response.json()["error"] == "Too Many Requests"
     assert response.json()["details"]["tempo_ate_permitir_novamente"] == 12
+
+
+def test_create_customer_returns_id_captured_from_mercos(monkeypatch):
+    async def create(_self, method: str, path: str, **kwargs):
+        assert method == "POST"
+        assert path == "clientes"
+        assert kwargs["json"]["tipo"] == "F"
+        return {"id": 9290554}
+
+    monkeypatch.setattr(MercosClient, "request", create)
+    app.dependency_overrides[require_api_key] = lambda: None
+    try:
+        response = TestClient(app).post("/v1/customers", json={"tipo": "F"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {"id": 9290554}

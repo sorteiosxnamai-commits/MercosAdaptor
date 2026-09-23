@@ -15,6 +15,91 @@ def test_sanitize_removes_secrets_recursively():
     assert sanitize({"token": "x", "nested": {"CompanyToken": "y", "ok": 1}}) == {"nested": {"ok": 1}}
 
 
+def test_sanitize_redacts_customer_personal_data_recursively():
+    assert sanitize({
+        "cnpj": "52998224725",
+        "razao_social": "Maria da Silva",
+        "nested": {"telefones": [{"numero": "11999998888"}], "ok": 1},
+    }) == {
+        "cnpj": "[REDACTED]",
+        "razao_social": "[REDACTED]",
+        "nested": {"telefones": "[REDACTED]", "ok": 1},
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_preserves_meus_pedidos_id_when_body_is_empty():
+    def handler(request: httpx.Request):
+        assert request.method == "POST"
+        assert request.url.path == "/api/v1/clientes"
+        return httpx.Response(201, headers={"MeusPedidosID": "9290554"})
+
+    client = MercosClient(settings(), transport=httpx.MockTransport(handler))
+
+    assert await client.request("POST", "clientes", json={"tipo": "F"}) == {
+        "id": 9290554,
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_adds_header_id_without_discarding_response_body():
+    def handler(_request: httpx.Request):
+        return httpx.Response(
+            201,
+            json={"status": "created"},
+            headers={"MeusPedidosID": "9290554"},
+        )
+
+    client = MercosClient(settings(), transport=httpx.MockTransport(handler))
+
+    assert await client.request("POST", "clientes", json={"tipo": "F"}) == {
+        "status": "created",
+        "id": 9290554,
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_transport_failure_is_never_retried():
+    calls = 0
+
+    def handler(_request: httpx.Request):
+        nonlocal calls
+        calls += 1
+        raise httpx.ReadTimeout("response did not arrive")
+
+    client = MercosClient(
+        settings(mercos_max_retries=5),
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(MercosError) as exc_info:
+        await client.request("POST", "clientes", json={"tipo": "F"})
+
+    assert calls == 1
+    assert exc_info.value.details == {
+        "mutation_state": "unknown",
+        "error_type": "ReadTimeout",
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_rate_limit_is_returned_without_automatic_retry():
+    calls = 0
+
+    def handler(_request: httpx.Request):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(429, json={"tempo_ate_permitir_novamente": 2})
+
+    client = MercosClient(
+        settings(mercos_max_retries=5),
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(MercosRateLimitError):
+        await client.request("POST", "clientes", json={"tipo": "F"})
+
+    assert calls == 1
+
+
 @pytest.mark.asyncio
 async def test_pagination_uses_cursor_and_deduplicates():
     calls = 0

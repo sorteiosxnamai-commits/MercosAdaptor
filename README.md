@@ -9,6 +9,8 @@ Serviço independente que centraliza a comunicação com a API Mercos. O agente,
 - Retry automático para HTTP 429 e falhas transitórias.
 - Leitura de clientes, produtos, pedidos e cadastros auxiliares.
 - Inclusão/alteração de clientes, pedidos e títulos.
+- Preservação do ID criado pela Mercos (`MeusPedidosID`) em uma resposta JSON.
+- Mutações não são repetidas automaticamente após falha ou limite de requisições.
 - Credenciais Mercos nunca são devolvidas nas respostas.
 - Autenticação interna pelo header `X-API-Key`.
 - Contrato uniforme: `data`, `count` e `nextCursor`.
@@ -63,6 +65,11 @@ O consumidor só deve salvar `nextCursor` depois que todos os registros de `data
 | `POST/PUT /v1/orders` | Criar/alterar pedido via API v2 |
 | `POST/PUT /v1/customers` | Criar/alterar cliente |
 | `POST/PUT /v1/titles` | Criar/alterar título |
+
+Em criações bem-sucedidas, o adaptador converte o cabeçalho `MeusPedidosID`
+da Mercos para `{"id": 123}`. Se a resposta da Mercos já tiver um objeto JSON,
+os campos existentes são preservados e `id` é acrescentado quando estiver ausente.
+Uma mutação com resposta incerta nunca é enviada novamente automaticamente.
 
 ## Integração com agente e BI
 

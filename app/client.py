@@ -9,6 +9,16 @@ from app.errors import MercosConfigurationError, MercosError, MercosRateLimitErr
 
 logger = logging.getLogger(__name__)
 SENSITIVE = {"applicationtoken", "companytoken", "authorization", "token", "password", "secret", "apikey", "api_key"}
+PERSONAL = {
+    "cpf",
+    "cnpj",
+    "documento",
+    "email",
+    "telefone",
+    "telefones",
+    "razaosocial",
+    "nomefantasia",
+}
 ORDER_PAGE_SIZE = 20
 INTERNAL_MAX_WAIT = 60.0
 _mercos_gate = asyncio.Lock()
@@ -16,7 +26,13 @@ _mercos_gate = asyncio.Lock()
 
 def sanitize(value: Any) -> Any:
     if isinstance(value, dict):
-        return {k: sanitize(v) for k, v in value.items() if k.lower().replace("-", "").replace("_", "") not in SENSITIVE}
+        clean = {}
+        for key, item in value.items():
+            normalized = key.lower().replace("-", "").replace("_", "")
+            if normalized in SENSITIVE:
+                continue
+            clean[key] = "[REDACTED]" if normalized in PERSONAL else sanitize(item)
+        return clean
     if isinstance(value, list):
         return [sanitize(v) for v in value]
     return value
@@ -79,26 +95,51 @@ class MercosClient:
             wait = self._retry_after(response, wait)
         raise MercosRateLimitError(retry_after=max(wait, 1))
 
+    @staticmethod
+    def _response_payload(response: httpx.Response, method: str) -> Any:
+        """Preserve the entity ID returned by Mercos in ``MeusPedidosID``."""
+        created_id = response.headers.get("MeusPedidosID")
+        has_body = response.status_code != 204 and bool(response.content)
+        payload = response.json() if has_body else None
+        if method.upper() not in {"POST", "PUT", "PATCH"} or not created_id:
+            return payload
+        normalized_id: str | int = int(created_id) if created_id.isdigit() else created_id
+        if isinstance(payload, dict):
+            payload.setdefault("id", normalized_id)
+            return payload
+        return {"id": normalized_id}
+
     async def request(self, method: str, path: str, *, params: dict | None = None, json: Any = None, version: str = "v1") -> Any:
+        retry_safe = method.upper() in {"GET", "HEAD", "OPTIONS"}
+        max_attempts = self.settings.mercos_max_retries if retry_safe else 1
         async with _mercos_gate:
             async with httpx.AsyncClient(
                 headers=self._headers(), timeout=self.settings.mercos_timeout_seconds,
                 verify=self.settings.mercos_verify_ssl, transport=self._transport,
             ) as client:
                 last: httpx.Response | None = None
-                for attempt in range(self.settings.mercos_max_retries):
+                for attempt in range(max_attempts):
                     try:
                         response = await client.request(method, self._url(path, version=version), params=params, json=json)
                     except httpx.RequestError as exc:
-                        if attempt + 1 == self.settings.mercos_max_retries:
-                            raise MercosError("Falha de comunicação com a Mercos", details=type(exc).__name__) from exc
+                        if attempt + 1 == max_attempts:
+                            details: Any = type(exc).__name__
+                            if not retry_safe:
+                                details = {
+                                    "mutation_state": "unknown",
+                                    "error_type": type(exc).__name__,
+                                }
+                            raise MercosError(
+                                "Falha de comunicação com a Mercos",
+                                details=details,
+                            ) from exc
                         await asyncio.sleep(min(2 ** attempt, 8))
                         continue
                     last = response
                     if response.status_code != 429:
                         break
                     wait = self._retry_after(response, self.settings.mercos_default_retry_seconds)
-                    if wait > INTERNAL_MAX_WAIT or attempt + 1 >= self.settings.mercos_max_retries:
+                    if not retry_safe or wait > INTERNAL_MAX_WAIT or attempt + 1 >= max_attempts:
                         self._raise_rate_limit(response)
                     await asyncio.sleep(wait)
                 if last is None:
@@ -120,10 +161,14 @@ class MercosClient:
                     )
                 mapped = last.status_code if 400 <= last.status_code < 500 else 502
                 raise MercosError("A Mercos rejeitou a requisição", status_code=mapped, details=details)
-            if last.status_code == 204 or not last.content:
-                await asyncio.sleep(self.settings.mercos_page_pause_seconds)
-                return None
-            payload = last.json()
+            try:
+                payload = self._response_payload(last, method)
+            except ValueError as exc:
+                raise MercosError(
+                    "A Mercos devolveu uma resposta inválida",
+                    status_code=502,
+                    details={"response_type": "invalid_json"},
+                ) from exc
             await asyncio.sleep(self.settings.mercos_page_pause_seconds)
             return payload
 
