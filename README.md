@@ -14,6 +14,14 @@ Serviço independente que centraliza a comunicação com a API Mercos. O agente,
 - Contrato uniforme: `data`, `count` e `nextCursor`.
 - Sem dependência de Supabase: cada consumidor controla seu próprio banco e cursor.
 
+O adaptador não oferece busca de cliente por CPF/CNPJ. `GET /v1/customers`
+aceita `alterado_apos`; consumidores que precisam de lookup por documento devem
+manter um índice incremental protegido, sem percorrer toda a base por conversa.
+POST/PUT não são repetidos após timeout de transporte: o resultado pode ser
+desconhecido e precisa de reconciliação antes de qualquer nova tentativa.
+Em escritas bem-sucedidas, o id que a Mercos devolve no header `MeusPedidosID`
+é exposto no corpo da resposta como `{"id": ...}`.
+
 ## Início rápido
 
 ```bash

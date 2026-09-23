@@ -144,3 +144,68 @@ async def test_nested_order_type_resource_remains_on_v1():
 
     assert page["data"] == []
 
+
+@pytest.mark.asyncio
+async def test_customer_page_timeout_is_structured_provider_failure():
+    def handler(request: httpx.Request):
+        assert request.url.path == "/api/v1/clientes"
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    client = MercosClient(settings(), transport=httpx.MockTransport(handler))
+    with pytest.raises(MercosError) as exc_info:
+        await client.list_page("clientes")
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.details == "ReadTimeout"
+
+
+@pytest.mark.asyncio
+async def test_customer_page_invalid_json_is_structured_provider_failure():
+    client = MercosClient(settings(), transport=httpx.MockTransport(
+        lambda _: httpx.Response(200, text="not-json")
+    ))
+    with pytest.raises(MercosError) as exc_info:
+        await client.list_page("clientes")
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.details == "invalid_json"
+
+
+@pytest.mark.asyncio
+async def test_customer_post_timeout_is_never_retried():
+    calls = 0
+
+    def handler(request: httpx.Request):
+        nonlocal calls
+        calls += 1
+        assert request.method == "POST" and request.url.path == "/api/v1/clientes"
+        raise httpx.ReadTimeout("unknown mutation outcome", request=request)
+
+    client = MercosClient(settings(mercos_max_retries=4), transport=httpx.MockTransport(handler))
+    with pytest.raises(MercosError) as exc_info:
+        await client.request("POST", "clientes", json={"tipo": "F", "razao_social": "Teste"})
+    assert calls == 1
+    assert exc_info.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_created_customer_id_comes_from_meuspedidosid_header():
+    def handler(request: httpx.Request):
+        assert request.method == "POST" and request.url.path == "/api/v1/clientes"
+        return httpx.Response(201, headers={"MeusPedidosID": "321"})
+
+    client = MercosClient(settings(), transport=httpx.MockTransport(handler))
+    assert await client.request("POST", "clientes", json={"tipo": "F", "razao_social": "Teste"}) == {"id": "321"}
+
+
+@pytest.mark.asyncio
+async def test_write_without_id_header_keeps_empty_result():
+    client = MercosClient(settings(), transport=httpx.MockTransport(lambda _: httpx.Response(201)))
+    assert await client.request("POST", "clientes", json={"tipo": "F"}) is None
+
+
+@pytest.mark.asyncio
+async def test_get_ignores_meuspedidosid_header():
+    client = MercosClient(settings(), transport=httpx.MockTransport(
+        lambda _: httpx.Response(200, json={"id": 7}, headers={"MeusPedidosID": "999"})
+    ))
+    assert await client.request("GET", "clientes/7") == {"id": 7}
+
