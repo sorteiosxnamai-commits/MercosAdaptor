@@ -187,6 +187,56 @@ async def test_customer_post_timeout_is_never_retried():
 
 
 @pytest.mark.asyncio
+async def test_customer_post_429_is_never_retried():
+    calls = 0
+
+    def handler(request: httpx.Request):
+        nonlocal calls
+        calls += 1
+        assert request.method == "POST" and request.url.path == "/api/v1/clientes"
+        return httpx.Response(429, headers={"Retry-After": "5"})
+
+    client = MercosClient(settings(mercos_max_retries=4), transport=httpx.MockTransport(handler))
+    with pytest.raises(MercosRateLimitError) as exc_info:
+        await client.request("POST", "clientes", json={"tipo": "F", "razao_social": "Teste"})
+    assert calls == 1
+    assert exc_info.value.retry_after > 0
+
+
+@pytest.mark.asyncio
+async def test_customer_put_timeout_is_never_retried():
+    calls = 0
+
+    def handler(request: httpx.Request):
+        nonlocal calls
+        calls += 1
+        assert request.method == "PUT" and request.url.path == "/api/v1/clientes/9"
+        raise httpx.ReadTimeout("unknown mutation outcome", request=request)
+
+    client = MercosClient(settings(mercos_max_retries=4), transport=httpx.MockTransport(handler))
+    with pytest.raises(MercosError):
+        await client.request("PUT", "clientes/9", json={"tipo": "F"})
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_get_still_retries_after_a_transport_failure():
+    calls = 0
+
+    def handler(request: httpx.Request):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.ReadTimeout("first attempt lost", request=request)
+        return httpx.Response(200, json={"id": 7})
+
+    client = MercosClient(settings(mercos_max_retries=4), transport=httpx.MockTransport(handler))
+    result = await client.request("GET", "clientes/7")
+    assert calls > 1
+    assert result == {"id": 7}
+
+
+@pytest.mark.asyncio
 async def test_created_customer_id_comes_from_meuspedidosid_header():
     def handler(request: httpx.Request):
         assert request.method == "POST" and request.url.path == "/api/v1/clientes"
