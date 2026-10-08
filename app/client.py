@@ -6,12 +6,12 @@ import httpx
 
 from app.config import Settings, get_settings
 from app.errors import MercosConfigurationError, MercosError, MercosRateLimitError
+from app.quota import get_gate
 
 logger = logging.getLogger(__name__)
 SENSITIVE = {"applicationtoken", "companytoken", "authorization", "token", "password", "secret", "apikey", "api_key"}
 ORDER_PAGE_SIZE = 20
 INTERNAL_MAX_WAIT = 60.0
-_mercos_gate = asyncio.Lock()
 
 
 def sanitize(value: Any) -> Any:
@@ -47,9 +47,14 @@ class MercosClient:
     def _version_for_resource(resource: str) -> str:
         return "v2" if resource == "pedidos" else "v1"
 
+    def _gate(self):
+        """Gate de cota da conta, compartilhado por todos os consumidores."""
+        return get_gate(self.settings)
+
     @staticmethod
-    def _page_params(resource: str, changed_after: str | None) -> dict:
+    def _page_params(resource: str, changed_after: str | None, extra: dict | None = None) -> dict:
         params = {"alterado_apos": changed_after} if changed_after else {}
+        params.update(extra or {})
         if resource == "pedidos":
             params["registros_por_pagina"] = ORDER_PAGE_SIZE
         return params
@@ -83,9 +88,10 @@ class MercosClient:
         # A mutation may have reached Mercos before a transport timeout. Never
         # retry POST/PUT here; the caller must reconcile an unknown outcome.
         attempts = self.settings.mercos_max_retries if method.upper() == "GET" else 1
-        async with _mercos_gate:
+        headers = self._headers()
+        async with self._gate().slot() as slot:
             async with httpx.AsyncClient(
-                headers=self._headers(), timeout=self.settings.mercos_timeout_seconds,
+                headers=headers, timeout=self.settings.mercos_timeout_seconds,
                 verify=self.settings.mercos_verify_ssl, transport=self._transport,
             ) as client:
                 last: httpx.Response | None = None
@@ -102,11 +108,14 @@ class MercosClient:
                         break
                     wait = self._retry_after(response, self.settings.mercos_default_retry_seconds)
                     if wait > INTERNAL_MAX_WAIT or attempt + 1 >= attempts:
+                        # a conta toda espera: nenhum consumidor chama antes do deadline
+                        slot.cooldown(wait)
                         self._raise_rate_limit(response)
                     await asyncio.sleep(wait)
                 if last is None:
                     raise MercosError("Mercos não respondeu")
                 if last.status_code == 429:
+                    slot.cooldown(self._retry_after(last, self.settings.mercos_default_retry_seconds))
                     self._raise_rate_limit(last)
             if last.is_error:
                 try:
@@ -114,13 +123,16 @@ class MercosClient:
                 except ValueError:
                     details = last.text[:500]
                 if last.status_code in (401, 403):
-                    raise MercosError(
+                    by_id_read = method.upper() == "GET" and "/" in path.strip("/")
+                    message = (
                         f"Sem permissão Mercos para '{path}'. "
                         "GET por ID só existe no sandbox; em produção use a listagem. "
-                        "Se precisar do detalhe, peça liberação ao suporte Mercos.",
-                        status_code=403,
-                        details=details,
+                        "Se precisar do detalhe, peça liberação ao suporte Mercos."
+                        if by_id_read
+                        else f"Sem permissão Mercos para {method.upper()} '{path}' "
+                        f"(HTTP {last.status_code} do Mercos)."
                     )
+                    raise MercosError(message, status_code=403, details=details)
                 mapped = last.status_code if 400 <= last.status_code < 500 else 502
                 raise MercosError("A Mercos rejeitou a requisição", status_code=mapped, details=details)
             payload = None
@@ -129,7 +141,8 @@ class MercosClient:
                     payload = last.json()
                 except ValueError as exc:
                     raise MercosError("Resposta Mercos inválida", details="invalid_json") from exc
-            await asyncio.sleep(self.settings.mercos_page_pause_seconds)
+            # pacing: empurra o deadline da conta em vez de segurar esta resposta
+            slot.cooldown(self.settings.mercos_page_pause_seconds)
             return self._with_created_id(method, last, payload)
 
     @staticmethod
@@ -185,7 +198,7 @@ class MercosClient:
         self, client: httpx.AsyncClient, resource: str, params: dict, *, version: str = "v1"
     ) -> httpx.Response:
         last = None
-        async with _mercos_gate:
+        async with self._gate().slot() as slot:
             for attempt in range(self.settings.mercos_max_retries):
                 try:
                     last = await client.get(self._url(resource, version=version), params=params)
@@ -195,10 +208,16 @@ class MercosClient:
                     break
                 wait = self._retry_after(last, self.settings.mercos_default_retry_seconds)
                 if wait > INTERNAL_MAX_WAIT or attempt + 1 >= self.settings.mercos_max_retries:
+                    slot.cooldown(wait)
                     self._raise_rate_limit(last)
                 await asyncio.sleep(wait)
-        if last is None or last.status_code == 429:
-            self._raise_rate_limit(last)
+            if last is None or last.status_code == 429:
+                if last is not None:
+                    slot.cooldown(self._retry_after(last, self.settings.mercos_default_retry_seconds))
+                self._raise_rate_limit(last)
+            if not last.is_error:
+                # pacing dentro do gate (antes ficava fora do lock e não valia para ninguém)
+                slot.cooldown(self.settings.mercos_page_pause_seconds)
         if last.is_error:
             try:
                 details = sanitize(last.json())
@@ -228,12 +247,22 @@ class MercosClient:
             )
             logger.warning("Mercos page error %s %s: %s", last.status_code, resource, details)
             raise MercosError("Falha ao paginar recurso Mercos", status_code=mapped, details=details)
-        await asyncio.sleep(self.settings.mercos_page_pause_seconds)
         return last
 
-    async def list_page(self, resource: str, *, changed_after: str | None = None) -> dict[str, Any]:
-        """Fetch a single Mercos page. nextCursor is set only when more pages exist."""
-        params = self._page_params(resource, changed_after)
+    async def list_page(
+        self,
+        resource: str,
+        *,
+        changed_after: str | None = None,
+        extra_params: dict | None = None,
+        id_field: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch a single Mercos page. nextCursor is set only when more pages exist.
+
+        `extra_params` já chega validado pela allowlist da capacidade.
+        `id_field` (ex.: comissao_id) faz a página devolver `lastId`, usado em
+        recursos que paginam por `ultimo_id` e não por `alterado_apos`."""
+        params = self._page_params(resource, changed_after, extra_params)
         # Pedidos só na API v2 — não tenta v1
         version = self._version_for_resource(resource)
         async with httpx.AsyncClient(
@@ -261,12 +290,16 @@ class MercosClient:
             next_cursor = page_cursor
             if not next_cursor or next_cursor == changed_after:
                 raise MercosError("Paginação interrompida: cursor não avançou")
-        return {
+        page = {
             "data": data,
             "pageCursor": page_cursor,
             "nextCursor": next_cursor,
             "count": len(data),
         }
+        if id_field:
+            ids = [int(x[id_field]) for x in data if isinstance(x, dict) and str(x.get(id_field, "")).isdigit()]
+            page["lastId"] = max(ids) if ids else None
+        return page
 
     async def get_detail(self, resource: str, mercos_id: str) -> Any:
         """Fetch a resource detail using the same API version as its list endpoint."""

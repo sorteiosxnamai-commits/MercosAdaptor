@@ -11,11 +11,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Coordenação de cota entre várias réplicas (MERCOS_REDIS_URL).
+redis = ["redis==8.1.0"]
 dev = [
   "pytest==8.4.2",
   "pytest-asyncio==1.4.0",
   "respx==0.23.1",
   "ruff==0.15.22",
+  "redis==8.1.0",
+  "fakeredis==2.39.0",
+  "lupa==2.8",
 ]
 
 [tool.pytest.ini_options]

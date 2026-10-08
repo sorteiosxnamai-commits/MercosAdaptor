@@ -72,6 +72,24 @@ O consumidor só deve salvar `nextCursor` depois que todos os registros de `data
 | `POST/PUT /v1/customers` | Criar/alterar cliente |
 | `POST/PUT /v1/titles` | Criar/alterar título |
 
+## Extensões para o ERP (aditivas)
+
+Tudo abaixo é novo; as rotas e respostas antigas não mudaram (ver `docs/erp-extensions.md`).
+
+- `GET /v1/capabilities`: o que este build sabe fazer, escopos da chave que chamou, evidência oficial
+  de cada linha e o que **não** está implementado. Não prova acesso da conta Mercos.
+- **Chave ERP com escopos** (`MERCOS_ERP_API_KEY` + `MERCOS_ERP_SCOPES`). A chave legada continua
+  com leitura e as três escritas de sempre (clientes, pedidos, títulos) e **não ganha** as novas.
+- **Rotas novas, explícitas e com DTO**: `POST/PUT /v1/products`, `PUT /v1/products/{id}/stock`
+  (saldo absoluto), `POST /v1/orders/{id}/cancel`, `POST/PUT /v1/billings`,
+  `POST/PUT /v1/payment-methods`. Nunca encaminham verbo/caminho arbitrário.
+- **Leituras novas** (`titles`, `payments`, `payment-methods`, `promotions`, `commissions`) com
+  filtros em allowlist. Vêm **desligadas** até a validação no sandbox: liste a chave em
+  `MERCOS_ENABLED_EXTENSIONS`.
+- **Cota da conta compartilhada** entre todos os consumidores (`app/quota.py`): serializa chamadas,
+  guarda um deadline único (429 e pacing valem para BI, ERP e agente) e falha rápido com
+  `Retry-After` quando a espera é longa. Várias réplicas: `MERCOS_REDIS_URL` (instale `.[redis]`).
+
 ## Integração com agente e BI
 
 Cada consumidor configura somente:

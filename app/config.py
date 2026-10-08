@@ -48,6 +48,14 @@ class Settings(BaseSettings):
     mercos_max_pages: int = Field(default=500, ge=1)
     mercos_page_pause_seconds: float = Field(default=2.0, ge=0)
     mercos_verify_ssl: bool = True
+    # Chave exclusiva do ERP. Escopos explícitos; sem escopo de escrita ela só lê.
+    mercos_erp_api_key: str = ""
+    mercos_erp_scopes: str = "read"
+    # Extensões ainda não validadas no sandbox ficam desligadas até listadas aqui.
+    mercos_enabled_extensions: str = ""
+    # Coordenação de cota entre processos/réplicas. Vazio: coordenação local (1 instância).
+    mercos_redis_url: str = ""
+    mercos_gate_wait_seconds: float = Field(default=120, gt=0)
     log_level: str = "INFO"
 
     @field_validator("mercos_base_url", mode="before")
@@ -59,6 +67,14 @@ class Settings(BaseSettings):
     @classmethod
     def normalize_log_level(cls, value: str) -> str:
         return value.upper()
+
+    @property
+    def erp_scopes(self) -> frozenset[str]:
+        return frozenset(x.strip() for x in self.mercos_erp_scopes.split(",") if x.strip())
+
+    @property
+    def enabled_extensions(self) -> frozenset[str]:
+        return frozenset(x.strip() for x in self.mercos_enabled_extensions.split(",") if x.strip())
 
     @property
     def configured(self) -> bool:
