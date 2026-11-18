@@ -13,6 +13,26 @@ def test_health_does_not_expose_credentials():
     assert "password" not in response.text.lower()
 
 
+def test_product_images_route_proxies_mercos(monkeypatch):
+    async def request(_self, method: str, path: str, **kwargs):
+        assert method == "GET"
+        assert path == "imagens_produto"
+        assert kwargs.get("params") == {"produto_id": "99"}
+        return [{"produto_id": 99, "imagens": ["abc"]}]
+
+    monkeypatch.setattr(MercosClient, "request", request)
+    app.dependency_overrides[require_api_key] = lambda: None
+    try:
+        response = TestClient(app).get("/v1/product-images", params={"produto_id": "99"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["resource"] == "product-images"
+    assert body["data"][0]["produto_id"] == 99
+
+
 def test_order_detail_route_requires_authentication():
     response = TestClient(app).get("/v1/orders/42")
 

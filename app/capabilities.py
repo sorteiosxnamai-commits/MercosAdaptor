@@ -105,12 +105,6 @@ READ_BY_ALIAS = {c.alias: c for c in CAPABILITIES if c.kind == "read"}
 
 NOT_IMPLEMENTED = (
     {
-        "key": "read.product-images",
-        "reason": "A leitura devolve um objeto por produto com hashes SHA-512 (formato diferente do "
-        "envelope de lista); precisa de rota própria depois de validar no sandbox. Upload não exclui imagens.",
-        "evidence": DOCS + "v1imagens_produto",
-    },
-    {
         "key": "write.price-tables|payment-conditions|carriers|categories|segments|prices",
         "reason": "Métodos de escrita desses cadastros não foram confirmados na documentação consultada.",
         "evidence": "",

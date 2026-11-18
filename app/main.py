@@ -92,6 +92,21 @@ async def capabilities(principal: Principal = Depends(get_principal)):
     }
 
 
+@app.get("/v1/product-images", dependencies=[Depends(require_api_key)])
+async def list_product_images(
+    produto_id: str | None = Query(default=None),
+):
+    """Proxy for Mercos imagens_produto (SHA-512 hashes only — not public CDN URLs)."""
+    params = {"produto_id": produto_id} if produto_id else None
+    data = await MercosClient().request("GET", "imagens_produto", params=params)
+    return {
+        "resource": "product-images",
+        "count": len(data) if isinstance(data, list) else 1 if data else 0,
+        "data": data,
+        "note": "Mercos returns SHA-512 hashes. Public photo URLs live on arquivos.mercos.com via the B2B storefront.",
+    }
+
+
 @app.get("/v1/{resource}", dependencies=[Depends(require_api_key)])
 async def list_resource(request: Request, resource: str, changed_after: str | None = Query(default=None, alias="alterado_apos")):
     cap = READ_BY_ALIAS.get(resource)
